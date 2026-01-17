@@ -1,14 +1,11 @@
 import streamlit as st
-import yfinance as yf
 import google.generativeai as genai
-import pandas as pd
-import plotly.graph_objects as go
 from duckduckgo_search import DDGS
+import time
 
 # --- KONFIGURATION ---
-st.set_page_config(page_title="AI Research Dashboard", layout="wide")
+st.set_page_config(page_title="Deep Research Agent", layout="wide")
 
-# API Key Setup
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
 except:
@@ -16,144 +13,107 @@ except:
     st.stop()
 
 genai.configure(api_key=API_KEY)
-# Wir bleiben beim schnellen Flash-Modell
+# Wir nutzen 2.5 Flash für Geschwindigkeit und großes Kontext-Fenster
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- TOOLS (Der "Werkzeugkasten" des Agenten) ---
+# --- WERKZEUGE ---
 
-def search_web(keywords, max_results=4):
-    """Sucht aktiv im Web nach Informationen."""
+def search_tool(query):
+    """Führt eine echte Websuche durch."""
     try:
-        results = DDGS().text(keywords, max_results=max_results)
+        results = DDGS().text(query, max_results=3)
         summary = ""
         for r in results:
-            summary += f"- Titel: {r['title']}\n  Inhalt: {r['body']}\n  Link: {r['href']}\n\n"
+            summary += f"- {r['title']}: {r['body']} (Link: {r['href']})\n"
         return summary
     except Exception as e:
-        return f"Fehler bei der Websuche: {e}"
+        return f"Fehler bei der Suche: {e}"
 
-def get_market_data(ticker_symbol):
-    """Holt Finanzdaten & RSI."""
-    try:
-        symbols = {
-            "Bitcoin": "BTC-EUR",
-            "Ethereum": "ETH-EUR",
-            "Gold": "GC=F",
-            "MSCI World": "URTH"
-        }
-        t = yf.Ticker(symbols.get(ticker_symbol, ticker_symbol))
-        hist = t.history(period="1mo")
-        
-        if hist.empty: return None
-
-        # RSI Berechnung
-        delta = hist['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        
-        current_price = hist['Close'].iloc[-1]
-        prev_price = hist['Close'].iloc[-2]
-        change_pct = ((current_price - prev_price) / prev_price) * 100
-        
-        return {
-            "price": current_price,
-            "change": change_pct,
-            "rsi": rsi.iloc[-1]
-        }
-    except:
-        return None
-
-def create_gauge(value, title):
-    """Erstellt Tacho-Grafik."""
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = value,
-        title = {'text': title, 'font': {'size': 14}},
-        gauge = {
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 30], 'color': "rgba(0, 255, 0, 0.3)"},
-                {'range': [30, 70], 'color': "rgba(200, 200, 200, 0.3)"},
-                {'range': [70, 100], 'color': "rgba(255, 0, 0, 0.3)"}],
-        }
-    ))
-    fig.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20))
-    return fig
-
-# --- HAUPTPROGRAMM ---
-
-st.title("🕵️‍♂️ Mein AI Research Agent")
-
-# 1. MARKTDATEN (Live Charts)
-st.subheader("1. Markt-Status")
-assets = ["Bitcoin", "Ethereum", "Gold", "MSCI World"]
-cols = st.columns(4)
-market_data_string = ""
-
-for i, asset in enumerate(assets):
-    data = get_market_data(asset)
-    with cols[i]:
-        if data:
-            st.metric(asset, f"{data['price']:,.0f}", f"{data['change']:.2f}%")
-            st.plotly_chart(create_gauge(data['rsi'], "RSI"), use_container_width=True)
-            market_data_string += f"{asset}: {data['change']:.2f}% (RSI: {data['rsi']:.1f})\n"
-
-st.divider()
-
-# 2. DER RECHERCHE AGENT
-st.subheader("2. Recherche & Analyse")
-
-col_input, col_result = st.columns([1, 2])
-
-with col_input:
-    st.info("Was soll ich heute recherchieren?")
+def run_agent_step(history, user_goal):
+    """Ein einzelner Denkschritt des Agenten."""
     
-    # Hier definierst du deine Themen-Prompts
-    topic1 = st.text_input("Thema A", "Aktuelle AI Agents & LLM News heute")
-    topic2 = st.text_input("Thema B", "Bitcoin Krypto Markt Analyse aktuell")
+    prompt = f"""
+    Du bist ein autonomer Research-Agent.
+    Ziel des Nutzers: "{user_goal}"
     
-    start_btn = st.button("🚀 Recherche starten", type="primary")
+    Bisheriger Verlauf:
+    {history}
+    
+    Deine Anweisungen:
+    1. Analysiere, welche Informationen dir noch fehlen, um das Ziel perfekt zu beantworten.
+    2. Wenn du Informationen brauchst, antworte EXAKT im Format: 
+       SEARCH: [Deine Suchanfrage]
+    3. Wenn du genug Informationen hast, antworte EXAKT im Format:
+       ANSWER: [Deine ausführliche, finale Antwort mit Quellen]
+       
+    Wichtig: Mache immer nur EINEN Schritt (Suchen ODER Antworten).
+    """
+    
+    response = model.generate_content(prompt)
+    return response.text.strip()
 
-with col_result:
-    if start_btn:
-        with st.status("Agent arbeitet...", expanded=True) as status:
+# --- UI ---
+
+st.title("🕵️‍♂️ Deep Research Agent")
+st.markdown("Dieser Agent denkt selbstständig nach und führt mehrere Suchschritte aus, um eine komplexe Frage zu beantworten.")
+
+# Eingabe
+user_query = st.text_input("Was soll ich recherchieren?", "Wie steht es aktuell um Bitcoin und gibt es wichtige regulatorische News?")
+start_btn = st.button("🚀 Deep Research starten", type="primary")
+
+# Der Agenten-Loop
+if start_btn and user_query:
+    history = ""
+    step_count = 0
+    max_steps = 5 # Sicherheitsbremse, damit er nicht ewig läuft
+    
+    status_container = st.container()
+    
+    with status_container:
+        st.write("---")
+        progress_log = st.empty()
+        
+        while step_count < max_steps:
+            step_count += 1
             
-            # A) Websuche ausführen
-            status.write(f"🔍 Suche im Web nach: '{topic1}'...")
-            web_results_1 = search_web(topic1)
+            # 1. Agenten fragen (Denken)
+            with st.spinner(f"Schritt {step_count}: Agent denkt nach..."):
+                response = run_agent_step(history, user_query)
             
-            status.write(f"🔍 Suche im Web nach: '{topic2}'...")
-            web_results_2 = search_web(topic2)
+            # 2. Entscheidung: Suchen oder Antworten?
+            if response.startswith("SEARCH:"):
+                # Suchbegriff extrahieren
+                query = response.replace("SEARCH:", "").strip()
+                
+                # Visualisierung für den User
+                st.info(f"🔍 **Agent entscheidet zu suchen:** '{query}'")
+                
+                # Suche ausführen
+                search_results = search_tool(query)
+                
+                # Ergebnis dem Verlauf hinzufügen
+                history += f"\n--- SCHRITT {step_count} ---\n"
+                history += f"AGENT ACTION: Search for '{query}'\n"
+                history += f"SEARCH RESULTS: {search_results}\n"
+                
+                # Kleiner Sleep um API nicht zu fluten
+                time.sleep(1)
+                
+            elif response.startswith("ANSWER:"):
+                # Fertig!
+                final_answer = response.replace("ANSWER:", "").strip()
+                st.success("✅ Recherche abgeschlossen!")
+                st.markdown("### 📝 Ergebnisbericht")
+                st.markdown(final_answer)
+                break
             
-            # B) Alles an Gemini senden
-            status.write("🧠 Analysiere Daten mit Gemini 2.5...")
-            
-            prompt = f"""
-            Du bist mein persönlicher Research-Agent. Erstelle ein Executive Briefing.
-            
-            TEIL 1: FINANZ-CHECK (Daten: {market_data_string})
-            - Kurze Einschätzung der Marktlage basierend auf RSI und Preisänderung.
-            
-            TEIL 2: RECHERCHE ERGEBNISSE
-            Thema A: {topic1}
-            Gefundene Infos: {web_results_1}
-            
-            Thema B: {topic2}
-            Gefundene Infos: {web_results_2}
-            
-            ANWEISUNG:
-            - Filtere unwichtige Werbung heraus.
-            - Fasse die wichtigsten Erkenntnisse in Bulletpoints zusammen.
-            - Gib eine Handlungsempfehlung oder ein Fazit ab.
-            - Nutze Markdown Formatierung.
-            """
-            
-            try:
-                response = model.generate_content(prompt)
-                st.markdown(response.text)
-                status.update(label="Fertig!", state="complete", expanded=False)
-            except Exception as e:
-                st.error(f"Fehler: {e}")
+            else:
+                # Fallback, falls der Agent das Format vergisst
+                st.warning(f"Agent hat unerwartet geantwortet: {response}")
+                history += f"\n(Fehler: Bitte nutze SEARCH: oder ANSWER:)\n"
+        
+        if step_count >= max_steps:
+            st.error("Maximale Anzahl an Schritten erreicht. Hier ist, was wir bisher haben.")
+            # Letzter Versuch einer Antwort
+            final = model.generate_content(f"Fasse zusammen was wir bisher wissen zu: {user_query}. Verlauf: {history}")
+            st.markdown(final.text)
