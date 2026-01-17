@@ -65,7 +65,7 @@ start_btn = st.button("🚀 Deep Research starten", type="primary")
 if start_btn and user_query:
     history = ""
     step_count = 0
-    max_steps = 5 # Sicherheitsbremse, damit er nicht ewig läuft
+    max_steps = 5 
     
     status_container = st.container()
     
@@ -76,44 +76,48 @@ if start_btn and user_query:
         while step_count < max_steps:
             step_count += 1
             
-            # 1. Agenten fragen (Denken)
-            with st.spinner(f"Schritt {step_count}: Agent denkt nach..."):
-                response = run_agent_step(history, user_query)
+            # WICHTIG: Atempause vor jeder KI-Anfrage, um "ResourceExhausted" zu vermeiden
+            if step_count > 1:
+                time.sleep(5) # 5 Sekunden Pause zwischen den Gedanken
             
-            # 2. Entscheidung: Suchen oder Antworten?
-            if response.startswith("SEARCH:"):
-                # Suchbegriff extrahieren
-                query = response.replace("SEARCH:", "").strip()
+            try:
+                # 1. Agenten fragen (Denken)
+                with st.spinner(f"Schritt {step_count}: Agent denkt nach..."):
+                    response = run_agent_step(history, user_query)
                 
-                # Visualisierung für den User
-                st.info(f"🔍 **Agent entscheidet zu suchen:** '{query}'")
+                # 2. Entscheidung: Suchen oder Antworten?
+                if response.startswith("SEARCH:"):
+                    query = response.replace("SEARCH:", "").strip()
+                    st.info(f"🔍 **Agent sucht:** '{query}'")
+                    
+                    search_results = search_tool(query)
+                    
+                    history += f"\n--- SCHRITT {step_count} ---\n"
+                    history += f"AGENT ACTION: Search for '{query}'\n"
+                    history += f"SEARCH RESULTS: {search_results}\n"
+                    
+                elif response.startswith("ANSWER:"):
+                    final_answer = response.replace("ANSWER:", "").strip()
+                    st.success("✅ Recherche abgeschlossen!")
+                    st.markdown("### 📝 Ergebnisbericht")
+                    st.markdown(final_answer)
+                    break # Schleife beenden
                 
-                # Suche ausführen
-                search_results = search_tool(query)
-                
-                # Ergebnis dem Verlauf hinzufügen
-                history += f"\n--- SCHRITT {step_count} ---\n"
-                history += f"AGENT ACTION: Search for '{query}'\n"
-                history += f"SEARCH RESULTS: {search_results}\n"
-                
-                # Kleiner Sleep um API nicht zu fluten
-                time.sleep(1)
-                
-            elif response.startswith("ANSWER:"):
-                # Fertig!
-                final_answer = response.replace("ANSWER:", "").strip()
-                st.success("✅ Recherche abgeschlossen!")
-                st.markdown("### 📝 Ergebnisbericht")
-                st.markdown(final_answer)
-                break
+                else:
+                    st.warning(f"Unerwartete Antwort: {response}")
+                    history += f"\n(Fehler: Bitte nutze SEARCH: oder ANSWER:)\n"
             
-            else:
-                # Fallback, falls der Agent das Format vergisst
-                st.warning(f"Agent hat unerwartet geantwortet: {response}")
-                history += f"\n(Fehler: Bitte nutze SEARCH: oder ANSWER:)\n"
+            except Exception as e:
+                st.error(f"Ein Fehler ist aufgetreten (meistens Limit erreicht): {e}")
+                st.warning("Tipp: Warte eine Minute und versuche es erneut.")
+                break # Notbremse
         
+        # Falls die Schritte aufgebraucht sind oder ein Fehler passierte
         if step_count >= max_steps:
-            st.error("Maximale Anzahl an Schritten erreicht. Hier ist, was wir bisher haben.")
-            # Letzter Versuch einer Antwort
-            final = model.generate_content(f"Fasse zusammen was wir bisher wissen zu: {user_query}. Verlauf: {history}")
-            st.markdown(final.text)
+            st.warning("Maximale Schritte erreicht. Erstelle Zusammenfassung des bisherigen Wissens...")
+            try:
+                time.sleep(2) # Kurze Pause vor dem letzten Call
+                final = model.generate_content(f"Fasse zusammen was wir bisher wissen zu: {user_query}. Verlauf: {history}")
+                st.markdown(final.text)
+            except Exception as e:
+                st.error("Konnte keine Zusammenfassung erstellen (Limit erreicht).")
