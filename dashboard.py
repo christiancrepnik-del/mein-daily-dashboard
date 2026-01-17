@@ -1,12 +1,12 @@
 import streamlit as st
 import yfinance as yf
 import google.generativeai as genai
-import feedparser
 import pandas as pd
 import plotly.graph_objects as go
+from duckduckgo_search import DDGS
 
 # --- KONFIGURATION ---
-st.set_page_config(page_title="Executive Dashboard", layout="wide")
+st.set_page_config(page_title="AI Research Dashboard", layout="wide")
 
 # API Key Setup
 try:
@@ -16,26 +16,35 @@ except:
     st.stop()
 
 genai.configure(api_key=API_KEY)
+# Wir bleiben beim schnellen Flash-Modell
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- HILFSFUNKTIONEN ---
+# --- TOOLS (Der "Werkzeugkasten" des Agenten) ---
+
+def search_web(keywords, max_results=4):
+    """Sucht aktiv im Web nach Informationen."""
+    try:
+        results = DDGS().text(keywords, max_results=max_results)
+        summary = ""
+        for r in results:
+            summary += f"- Titel: {r['title']}\n  Inhalt: {r['body']}\n  Link: {r['href']}\n\n"
+        return summary
+    except Exception as e:
+        return f"Fehler bei der Websuche: {e}"
 
 def get_market_data(ticker_symbol):
-    """Holt Daten und berechnet RSI für ein Asset."""
+    """Holt Finanzdaten & RSI."""
     try:
-        # Ticker-Mapping für Yahoo Finance
         symbols = {
             "Bitcoin": "BTC-EUR",
             "Ethereum": "ETH-EUR",
-            "Gold": "GC=F",          # Gold Futures
-            "MSCI World": "URTH"     # iShares MSCI World ETF als Proxy
+            "Gold": "GC=F",
+            "MSCI World": "URTH"
         }
-        
         t = yf.Ticker(symbols.get(ticker_symbol, ticker_symbol))
         hist = t.history(period="1mo")
         
-        if hist.empty:
-            return None
+        if hist.empty: return None
 
         # RSI Berechnung
         delta = hist['Close'].diff()
@@ -51,108 +60,100 @@ def get_market_data(ticker_symbol):
         return {
             "price": current_price,
             "change": change_pct,
-            "rsi": rsi.iloc[-1],
-            "history": hist['Close']
+            "rsi": rsi.iloc[-1]
         }
-    except Exception as e:
+    except:
         return None
 
 def create_gauge(value, title):
-    """Erstellt einen Tacho mit Plotly."""
+    """Erstellt Tacho-Grafik."""
     fig = go.Figure(go.Indicator(
         mode = "gauge+number",
         value = value,
-        title = {'text': title},
-        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': title, 'font': {'size': 14}},
         gauge = {
             'axis': {'range': [0, 100]},
             'bar': {'color': "darkblue"},
             'steps': [
-                {'range': [0, 30], 'color': "lightgreen"},  # Buy Zone
-                {'range': [30, 70], 'color': "lightgray"},  # Hold Zone
-                {'range': [70, 100], 'color': "salmon"}],   # Sell Zone
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': value}
+                {'range': [0, 30], 'color': "rgba(0, 255, 0, 0.3)"},
+                {'range': [30, 70], 'color': "rgba(200, 200, 200, 0.3)"},
+                {'range': [70, 100], 'color': "rgba(255, 0, 0, 0.3)"}],
         }
     ))
-    fig.update_layout(height=250, margin=dict(l=10, r=10, t=40, b=10))
+    fig.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20))
     return fig
-
-def get_combined_analysis(market_data_str, news_str):
-    """Der EINE Aufruf, der alles analysiert."""
-    prompt = f"""
-    Du bist ein Senior Investment Advisor. Hier ist dein Morgen-Briefing.
-    
-    1. MARKTDATEN:
-    {market_data_str}
-    
-    2. NEWS:
-    {news_str}
-    
-    AUFGABE:
-    Erstelle eine prägnante Zusammenfassung (Markdown).
-    - Abschnitt 1: "Markt-Radar": Gib für jedes Asset (BTC, ETH, Gold, MSCI) EINEN Satz Einschätzung basierend auf RSI und Trend (z.B. "Bitcoin ist überkauft, Vorsicht ratsam").
-    - Abschnitt 2: "News-Impact": Welche der News ist heute am relevantesten für Tech/Investments und warum?
-    - Tonfall: Professionell, objektiv, direkt.
-    """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return "KI-Dienst nicht erreichbar."
 
 # --- HAUPTPROGRAMM ---
 
-st.title("🚀 Executive Dashboard")
+st.title("🕵️‍♂️ Mein AI Research Agent")
 
-# 1. DATEN SAMMELN (Passiert im Hintergrund)
+# 1. MARKTDATEN (Live Charts)
+st.subheader("1. Markt-Status")
 assets = ["Bitcoin", "Ethereum", "Gold", "MSCI World"]
-market_results = {}
-market_context_for_ai = ""
-
-# Layout für die Assets (4 Spalten)
 cols = st.columns(4)
+market_data_string = ""
 
 for i, asset in enumerate(assets):
     data = get_market_data(asset)
-    market_results[asset] = data
-    
     with cols[i]:
-        st.subheader(asset)
         if data:
-            # Metrik anzeigen
-            st.metric(label="Preis", value=f"{data['price']:,.2f}", delta=f"{data['change']:.2f}%")
-            
-            # Daten für AI String sammeln
-            market_context_for_ai += f"{asset}: Preis={data['price']:.2f}, Änderung={data['change']:.2f}%, RSI={data['rsi']:.1f}\n"
-            
-            # Tacho anzeigen
-            st.plotly_chart(create_gauge(data['rsi'], "RSI (Sentiment)"), use_container_width=True)
-        else:
-            st.error("Datenfehler")
+            st.metric(asset, f"{data['price']:,.0f}", f"{data['change']:.2f}%")
+            st.plotly_chart(create_gauge(data['rsi'], "RSI"), use_container_width=True)
+            market_data_string += f"{asset}: {data['change']:.2f}% (RSI: {data['rsi']:.1f})\n"
 
 st.divider()
 
-# 2. NEWS & AI ANALYSE BEREICH
-col_news, col_ai = st.columns([1, 2])
+# 2. DER RECHERCHE AGENT
+st.subheader("2. Recherche & Analyse")
 
-with col_news:
-    st.subheader("📰 News Feed")
-    rss_url = "https://www.heise.de/rss/heise-atom.xml"
-    feed = feedparser.parse(rss_url)
-    news_context_for_ai = ""
-    
-    for entry in feed.entries[:5]:
-        st.markdown(f"• [{entry.title}]({entry.link})")
-        news_context_for_ai += f"- {entry.title}\n"
+col_input, col_result = st.columns([1, 2])
 
-with col_ai:
-    st.subheader("🧠 KI Gesamt-Analyse")
+with col_input:
+    st.info("Was soll ich heute recherchieren?")
     
-    if st.button("Generiere Tages-Briefing (1 Token)"):
-        with st.spinner('Der Agent analysiert Märkte & News...'):
-            # Hier passiert der EINE Aufruf
-            analysis = get_combined_analysis(market_context_for_ai, news_context_for_ai)
-            st.markdown(analysis)
+    # Hier definierst du deine Themen-Prompts
+    topic1 = st.text_input("Thema A", "Aktuelle AI Agents & LLM News heute")
+    topic2 = st.text_input("Thema B", "Bitcoin Krypto Markt Analyse aktuell")
+    
+    start_btn = st.button("🚀 Recherche starten", type="primary")
+
+with col_result:
+    if start_btn:
+        with st.status("Agent arbeitet...", expanded=True) as status:
+            
+            # A) Websuche ausführen
+            status.write(f"🔍 Suche im Web nach: '{topic1}'...")
+            web_results_1 = search_web(topic1)
+            
+            status.write(f"🔍 Suche im Web nach: '{topic2}'...")
+            web_results_2 = search_web(topic2)
+            
+            # B) Alles an Gemini senden
+            status.write("🧠 Analysiere Daten mit Gemini 2.5...")
+            
+            prompt = f"""
+            Du bist mein persönlicher Research-Agent. Erstelle ein Executive Briefing.
+            
+            TEIL 1: FINANZ-CHECK (Daten: {market_data_string})
+            - Kurze Einschätzung der Marktlage basierend auf RSI und Preisänderung.
+            
+            TEIL 2: RECHERCHE ERGEBNISSE
+            Thema A: {topic1}
+            Gefundene Infos: {web_results_1}
+            
+            Thema B: {topic2}
+            Gefundene Infos: {web_results_2}
+            
+            ANWEISUNG:
+            - Filtere unwichtige Werbung heraus.
+            - Fasse die wichtigsten Erkenntnisse in Bulletpoints zusammen.
+            - Gib eine Handlungsempfehlung oder ein Fazit ab.
+            - Nutze Markdown Formatierung.
+            """
+            
+            try:
+                response = model.generate_content(prompt)
+                st.markdown(response.text)
+                status.update(label="Fertig!", state="complete", expanded=False)
+            except Exception as e:
+                st.error(f"Fehler: {e}")
