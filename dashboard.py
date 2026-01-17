@@ -111,3 +111,21 @@ with col2:
                 st.success(analysis)
     except:
         st.error("Konnte News-Feed nicht laden.")
+
+# --- DEBUGGING TOOL (Füg das ganz unten im Code ein) ---
+with st.sidebar:
+    st.divider()
+    st.header("🔧 Diagnose")
+    if st.button("Verfügbare Modelle auflisten"):
+        try:
+            st.write("Frage Google API...")
+            models = genai.list_models()
+            found_any = False
+            for m in models:
+                if 'generateContent' in m.supported_generation_methods:
+                    st.code(m.name) # Das hier ist der exakte Name, den wir brauchen
+                    found_any = True
+            if not found_any:
+                st.error("Keine Modelle gefunden! API Key prüfen?")
+        except Exception as e:
+            st.error(f"Fehler: {e}")
