@@ -1,8 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import google.generativeai as genai
-import os
 import feedparser
+import pandas as pd
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Morning Briefing", layout="wide")
@@ -15,19 +15,32 @@ except:
     st.stop()
 
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# FIX: Wir nutzen den spezifischen Modell-Namen, um den 404-Fehler zu vermeiden
+model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 # --- FUNKTIONEN ---
+
+def calculate_rsi(data, window=14):
+    """Berechnet den Relative Strength Index (RSI) für technische Analyse."""
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1] # Gibt nur den allerneuesten Wert zurück
+
 def get_ai_insight(context_data, topic):
     prompt = f"""
     Du bist ein objektiver Finanz- und Tech-Analyst.
     Thema: {topic}
-    Hier sind die aktuellen Daten: {context_data}
+    Daten: {context_data}
     
     Aufgabe:
-    1. Fasse die Situation in 2-3 Sätzen zusammen.
-    2. Gib eine Einschätzung der Marktstimmung (Bullish/Bearish/Neutral).
-    3. Keine Finanzberatung.
+    1. Fasse die Situation extrem kurz zusammen.
+    2. Wenn es um Finanzen geht: Interpretiere den RSI (Indikator für Überkauft/Überverkauft).
+    3. Gib eine klare Einschätzung der Stimmung (Bullish/Bearish/Neutral).
     """
     try:
         response = model.generate_content(prompt)
@@ -40,51 +53,61 @@ st.title("☕ Dein Daily Dashboard")
 
 col1, col2 = st.columns(2)
 
-# --- PANEL 1: CRYPTO ---
+# --- PANEL 1: CRYPTO MIT RSI ---
 with col1:
-    st.subheader("💰 Crypto Analyse")
+    st.subheader("💰 Crypto Analyse & Empfehlung")
+    
+    # Wir holen mehr Daten (1 Monat), damit der RSI berechnet werden kann
     btc = yf.Ticker("BTC-EUR")
-    hist = btc.history(period="5d")
+    hist = btc.history(period="1mo")
     
     if not hist.empty:
         current_price = hist['Close'].iloc[-1]
         prev_price = hist['Close'].iloc[-2]
         change = ((current_price - prev_price) / prev_price) * 100
         
+        # RSI Berechnung
+        current_rsi = calculate_rsi(hist)
+        
+        # Visuelle Anzeige
         st.metric("Bitcoin (BTC)", f"{current_price:,.2f} €", f"{change:.2f}%")
+        
+        # RSI Tacho (Simpel dargestellt)
+        st.write(f"**RSI Indikator:** {current_rsi:.1f} (0-30: Buy | 70-100: Sell)")
+        if current_rsi < 30:
+            st.success("Signal: ÜBERVERKAUFT (Mögliche Kauf-Chance)")
+        elif current_rsi > 70:
+            st.warning("Signal: ÜBERKAUFT (Vorsicht, evtl. Korrektur)")
+        else:
+            st.info("Signal: NEUTRAL (Halten)")
+            
         st.line_chart(hist['Close'])
         
         if st.button("KI-Analyse Bitcoin"):
-            with st.spinner('Analyst denkt nach...'):
-                data_context = f"BTC Preis: {current_price:.2f} EUR. Änderung: {change:.2f}%."
-                analysis = get_ai_insight(data_context, "Bitcoin Kursentwicklung")
-                st.info(analysis)
-    else:
-        st.error("Keine Bitcoin-Daten verfügbar.")
+            with st.spinner('Analyst prüft Indikatoren...'):
+                data_context = f"BTC Preis: {current_price:.2f} EUR. RSI: {current_rsi:.1f}."
+                analysis = get_ai_insight(data_context, "Bitcoin Kurs & RSI Analyse")
+                st.markdown(analysis)
 
-# --- PANEL 2: ECHTE NEWS (RSS) ---
+# --- PANEL 2: ECHTE NEWS ---
 with col2:
     st.subheader("🤖 Aktuelle Tech-News")
     
-    # URL eines News-Feeds (hier z.B. Heise Online KI-Rubrik oder t3n)
-    # Alternativ: "https://www.golem.de/rss.php?feed=RSS2.0"
     rss_url = "https://www.heise.de/rss/heise-atom.xml" 
-    
-    feed = feedparser.parse(rss_url)
-    
-    # Wir nehmen die top 5 aktuellsten Beiträge
-    top_entries = feed.entries[:5]
-    
-    news_text = ""
-    st.write(f"Quelle: {feed.feed.title}")
-    
-    for entry in top_entries:
-        # Titel und Link anzeigen
-        st.markdown(f"• [{entry.title}]({entry.link})")
-        news_text += f"- {entry.title}\n"
+    try:
+        feed = feedparser.parse(rss_url)
+        top_entries = feed.entries[:5]
+        news_text = ""
         
-    if st.button("KI-Analyse der News"):
-        with st.spinner('Lese und analysiere Nachrichten...'):
-            # Wir geben dem Agenten die Schlagzeilen
-            analysis = get_ai_insight(news_text, "Aktuelle Tech-Schlagzeilen")
-            st.success(analysis)
+        st.caption(f"Quelle: {feed.feed.title}")
+        
+        for entry in top_entries:
+            st.markdown(f"• [{entry.title}]({entry.link})")
+            news_text += f"- {entry.title}\n"
+            
+        if st.button("KI-Analyse der News"):
+            with st.spinner('Lese Nachrichten...'):
+                analysis = get_ai_insight(news_text, "Aktuelle Tech-Schlagzeilen")
+                st.success(analysis)
+    except:
+        st.error("Konnte News-Feed nicht laden.")
