@@ -14,7 +14,7 @@ except:
 
 genai.configure(api_key=API_KEY)
 # Wir nutzen 2.5 Flash für Geschwindigkeit und großes Kontext-Fenster
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- WERKZEUGE ---
 
