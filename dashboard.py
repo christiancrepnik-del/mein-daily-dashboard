@@ -3,129 +3,156 @@ import yfinance as yf
 import google.generativeai as genai
 import feedparser
 import pandas as pd
+import plotly.graph_objects as go
 
 # --- KONFIGURATION ---
-st.set_page_config(page_title="Morning Briefing", layout="wide")
+st.set_page_config(page_title="Executive Dashboard", layout="wide")
 
-# Sicherheit: Key aus den Cloud-Secrets holen
+# API Key Setup
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
 except:
-    st.error("Kein API Key gefunden! Bitte in den Streamlit Secrets eintragen.")
+    st.error("API Key fehlt.")
     st.stop()
 
 genai.configure(api_key=API_KEY)
+model = genai.GenerativeModel('gemini-2.5-flash')
 
-# FIX: Wir nutzen den spezifischen Modell-Namen, um den 404-Fehler zu vermeiden
-model = genai.GenerativeModel('gemini-flash-latest')
+# --- HILFSFUNKTIONEN ---
 
-# --- FUNKTIONEN ---
+def get_market_data(ticker_symbol):
+    """Holt Daten und berechnet RSI für ein Asset."""
+    try:
+        # Ticker-Mapping für Yahoo Finance
+        symbols = {
+            "Bitcoin": "BTC-EUR",
+            "Ethereum": "ETH-EUR",
+            "Gold": "GC=F",          # Gold Futures
+            "MSCI World": "URTH"     # iShares MSCI World ETF als Proxy
+        }
+        
+        t = yf.Ticker(symbols.get(ticker_symbol, ticker_symbol))
+        hist = t.history(period="1mo")
+        
+        if hist.empty:
+            return None
 
-def calculate_rsi(data, window=14):
-    """Berechnet den Relative Strength Index (RSI) für technische Analyse."""
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1] # Gibt nur den allerneuesten Wert zurück
+        # RSI Berechnung
+        delta = hist['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        current_price = hist['Close'].iloc[-1]
+        prev_price = hist['Close'].iloc[-2]
+        change_pct = ((current_price - prev_price) / prev_price) * 100
+        
+        return {
+            "price": current_price,
+            "change": change_pct,
+            "rsi": rsi.iloc[-1],
+            "history": hist['Close']
+        }
+    except Exception as e:
+        return None
 
-def get_ai_insight(context_data, topic):
+def create_gauge(value, title):
+    """Erstellt einen Tacho mit Plotly."""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = value,
+        title = {'text': title},
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        gauge = {
+            'axis': {'range': [0, 100]},
+            'bar': {'color': "darkblue"},
+            'steps': [
+                {'range': [0, 30], 'color': "lightgreen"},  # Buy Zone
+                {'range': [30, 70], 'color': "lightgray"},  # Hold Zone
+                {'range': [70, 100], 'color': "salmon"}],   # Sell Zone
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': value}
+        }
+    ))
+    fig.update_layout(height=250, margin=dict(l=10, r=10, t=40, b=10))
+    return fig
+
+def get_combined_analysis(market_data_str, news_str):
+    """Der EINE Aufruf, der alles analysiert."""
     prompt = f"""
-    Du bist ein objektiver Finanz- und Tech-Analyst.
-    Thema: {topic}
-    Daten: {context_data}
+    Du bist ein Senior Investment Advisor. Hier ist dein Morgen-Briefing.
     
-    Aufgabe:
-    1. Fasse die Situation extrem kurz zusammen.
-    2. Wenn es um Finanzen geht: Interpretiere den RSI (Indikator für Überkauft/Überverkauft).
-    3. Gib eine klare Einschätzung der Stimmung (Bullish/Bearish/Neutral).
+    1. MARKTDATEN:
+    {market_data_str}
+    
+    2. NEWS:
+    {news_str}
+    
+    AUFGABE:
+    Erstelle eine prägnante Zusammenfassung (Markdown).
+    - Abschnitt 1: "Markt-Radar": Gib für jedes Asset (BTC, ETH, Gold, MSCI) EINEN Satz Einschätzung basierend auf RSI und Trend (z.B. "Bitcoin ist überkauft, Vorsicht ratsam").
+    - Abschnitt 2: "News-Impact": Welche der News ist heute am relevantesten für Tech/Investments und warum?
+    - Tonfall: Professionell, objektiv, direkt.
     """
     try:
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"Fehler bei der KI-Anfrage: {e}"
+        return "KI-Dienst nicht erreichbar."
 
-# --- DASHBOARD LAYOUT ---
-st.title("☕ Dein Daily Dashboard")
+# --- HAUPTPROGRAMM ---
 
-col1, col2 = st.columns(2)
+st.title("🚀 Executive Dashboard")
 
-# --- PANEL 1: CRYPTO MIT RSI ---
-with col1:
-    st.subheader("💰 Crypto Analyse & Empfehlung")
+# 1. DATEN SAMMELN (Passiert im Hintergrund)
+assets = ["Bitcoin", "Ethereum", "Gold", "MSCI World"]
+market_results = {}
+market_context_for_ai = ""
+
+# Layout für die Assets (4 Spalten)
+cols = st.columns(4)
+
+for i, asset in enumerate(assets):
+    data = get_market_data(asset)
+    market_results[asset] = data
     
-    # Wir holen mehr Daten (1 Monat), damit der RSI berechnet werden kann
-    btc = yf.Ticker("BTC-EUR")
-    hist = btc.history(period="1mo")
-    
-    if not hist.empty:
-        current_price = hist['Close'].iloc[-1]
-        prev_price = hist['Close'].iloc[-2]
-        change = ((current_price - prev_price) / prev_price) * 100
-        
-        # RSI Berechnung
-        current_rsi = calculate_rsi(hist)
-        
-        # Visuelle Anzeige
-        st.metric("Bitcoin (BTC)", f"{current_price:,.2f} €", f"{change:.2f}%")
-        
-        # RSI Tacho (Simpel dargestellt)
-        st.write(f"**RSI Indikator:** {current_rsi:.1f} (0-30: Buy | 70-100: Sell)")
-        if current_rsi < 30:
-            st.success("Signal: ÜBERVERKAUFT (Mögliche Kauf-Chance)")
-        elif current_rsi > 70:
-            st.warning("Signal: ÜBERKAUFT (Vorsicht, evtl. Korrektur)")
+    with cols[i]:
+        st.subheader(asset)
+        if data:
+            # Metrik anzeigen
+            st.metric(label="Preis", value=f"{data['price']:,.2f}", delta=f"{data['change']:.2f}%")
+            
+            # Daten für AI String sammeln
+            market_context_for_ai += f"{asset}: Preis={data['price']:.2f}, Änderung={data['change']:.2f}%, RSI={data['rsi']:.1f}\n"
+            
+            # Tacho anzeigen
+            st.plotly_chart(create_gauge(data['rsi'], "RSI (Sentiment)"), use_container_width=True)
         else:
-            st.info("Signal: NEUTRAL (Halten)")
-            
-        st.line_chart(hist['Close'])
-        
-        if st.button("KI-Analyse Bitcoin"):
-            with st.spinner('Analyst prüft Indikatoren...'):
-                data_context = f"BTC Preis: {current_price:.2f} EUR. RSI: {current_rsi:.1f}."
-                analysis = get_ai_insight(data_context, "Bitcoin Kurs & RSI Analyse")
-                st.markdown(analysis)
+            st.error("Datenfehler")
 
-# --- PANEL 2: ECHTE NEWS ---
-with col2:
-    st.subheader("🤖 Aktuelle Tech-News")
+st.divider()
+
+# 2. NEWS & AI ANALYSE BEREICH
+col_news, col_ai = st.columns([1, 2])
+
+with col_news:
+    st.subheader("📰 News Feed")
+    rss_url = "https://www.heise.de/rss/heise-atom.xml"
+    feed = feedparser.parse(rss_url)
+    news_context_for_ai = ""
     
-    rss_url = "https://www.heise.de/rss/heise-atom.xml" 
-    try:
-        feed = feedparser.parse(rss_url)
-        top_entries = feed.entries[:5]
-        news_text = ""
-        
-        st.caption(f"Quelle: {feed.feed.title}")
-        
-        for entry in top_entries:
-            st.markdown(f"• [{entry.title}]({entry.link})")
-            news_text += f"- {entry.title}\n"
-            
-        if st.button("KI-Analyse der News"):
-            with st.spinner('Lese Nachrichten...'):
-                analysis = get_ai_insight(news_text, "Aktuelle Tech-Schlagzeilen")
-                st.success(analysis)
-    except:
-        st.error("Konnte News-Feed nicht laden.")
+    for entry in feed.entries[:5]:
+        st.markdown(f"• [{entry.title}]({entry.link})")
+        news_context_for_ai += f"- {entry.title}\n"
 
-# --- DEBUGGING TOOL (Füg das ganz unten im Code ein) ---
-with st.sidebar:
-    st.divider()
-    st.header("🔧 Diagnose")
-    if st.button("Verfügbare Modelle auflisten"):
-        try:
-            st.write("Frage Google API...")
-            models = genai.list_models()
-            found_any = False
-            for m in models:
-                if 'generateContent' in m.supported_generation_methods:
-                    st.code(m.name) # Das hier ist der exakte Name, den wir brauchen
-                    found_any = True
-            if not found_any:
-                st.error("Keine Modelle gefunden! API Key prüfen?")
-        except Exception as e:
-            st.error(f"Fehler: {e}")
+with col_ai:
+    st.subheader("🧠 KI Gesamt-Analyse")
+    
+    if st.button("Generiere Tages-Briefing (1 Token)"):
+        with st.spinner('Der Agent analysiert Märkte & News...'):
+            # Hier passiert der EINE Aufruf
+            analysis = get_combined_analysis(market_context_for_ai, news_context_for_ai)
+            st.markdown(analysis)
