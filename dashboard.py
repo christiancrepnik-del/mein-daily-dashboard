@@ -17,7 +17,7 @@ except:
 genai.configure(api_key=API_KEY)
 
 # FIX: Wir nutzen den spezifischen Modell-Namen, um den 404-Fehler zu vermeiden
-model = genai.GenerativeModel('gemini-1.5-flash-001')
+model = genai.GenerativeModel('gemini-flash-latest')
 
 # --- FUNKTIONEN ---
 
