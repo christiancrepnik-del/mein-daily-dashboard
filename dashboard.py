@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import google.generativeai as genai
 import os
+import feedparser
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="Morning Briefing", layout="wide")
@@ -61,20 +62,29 @@ with col1:
     else:
         st.error("Keine Bitcoin-Daten verfügbar.")
 
-# --- PANEL 2: TRENDS ---
+# --- PANEL 2: ECHTE NEWS (RSS) ---
 with col2:
-    st.subheader("🤖 KI Trends")
-    # Platzhalter News (später RSS)
-    news = [
-        "Google Gemini 1.5 Flash ist schneller und günstiger",
-        "OpenAI stellt neue Sicherheits-Features vor",
-        "Apple integriert KI tiefer in iOS"
-    ]
-    st.write("Schlagzeilen:")
-    for n in news:
-        st.text(f"• {n}")
+    st.subheader("🤖 Aktuelle Tech-News")
+    
+    # URL eines News-Feeds (hier z.B. Heise Online KI-Rubrik oder t3n)
+    # Alternativ: "https://www.golem.de/rss.php?feed=RSS2.0"
+    rss_url = "https://www.heise.de/rss/heise-atom.xml" 
+    
+    feed = feedparser.parse(rss_url)
+    
+    # Wir nehmen die top 5 aktuellsten Beiträge
+    top_entries = feed.entries[:5]
+    
+    news_text = ""
+    st.write(f"Quelle: {feed.feed.title}")
+    
+    for entry in top_entries:
+        # Titel und Link anzeigen
+        st.markdown(f"• [{entry.title}]({entry.link})")
+        news_text += f"- {entry.title}\n"
         
-    if st.button("KI-Analyse Trends"):
-        with st.spinner('Lese News...'):
-            analysis = get_ai_insight("\n".join(news), "Aktuelle KI Nachrichten")
+    if st.button("KI-Analyse der News"):
+        with st.spinner('Lese und analysiere Nachrichten...'):
+            # Wir geben dem Agenten die Schlagzeilen
+            analysis = get_ai_insight(news_text, "Aktuelle Tech-Schlagzeilen")
             st.success(analysis)
